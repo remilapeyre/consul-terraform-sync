@@ -487,6 +487,17 @@ func (tf *Terraform) initTaskTemplate() error {
 		Renderer:     renderer,
 		FuncMapMerge: tmplfunc.HCLMap(metaMap),
 	})
+
+	if tf.template != nil {
+		tmpl = hcat.NewTemplate(hcat.TemplateInput{
+			Contents:     string(content) + "\n# lorna\n",
+			Renderer:     renderer,
+			FuncMapMerge: tmplfunc.HCLMap(metaMap),
+		})
+
+		tf.watcher.Mark(tf.template)
+		tf.watcher.Sweep(tf.template)
+	}
 	switch tf.task.Condition().(type) {
 	case *config.CatalogServicesConditionConfig:
 		tf.template = notifier.NewCatalogServicesRegistration(tmpl,

@@ -9,12 +9,82 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/consul-terraform-sync/api"
 	"github.com/hashicorp/consul-terraform-sync/testutils"
+	"github.com/hashicorp/consul/sdk/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestE2E_ReenableTaskTriggers specifically tests the case were an enabled task
+// is disabled and then re-enabled. It confirms that the task triggered as
+// expected once re-enabled.
+// See https://github.com/hashicorp/consul-terraform-sync/issues/320
+func TestE2E_ReenableTaskTriggers(t *testing.T) {
+	t.Parallel()
+
+	srv := testutils.NewTestConsulServer(t, testutils.TestConsulServerConfig{
+		HTTPSRelPath: "../testutils",
+	})
+	defer srv.Stop()
+
+	tempDir := fmt.Sprintf("%s%s", tempDirPrefix, "reenable_trigger")
+	cleanup := testutils.MakeTempDir(t, tempDir)
+
+	str := fmt.Sprintf(`
+task {
+	name = "%s"
+	description = "basic read-write e2e task api & web"
+	providers = ["local"]
+	source = "./test_modules/local_tags_file"
+	condition "catalog-services"{
+		regexp = "api"
+		source_includes_var = true
+	}
+}
+	`, dbTaskName)
+	configPath := filepath.Join(tempDir, configFile)
+	config := baseConfig().appendConsulBlock(srv).appendTerraformBlock(tempDir).appendString(str)
+	config.write(t, configPath)
+
+	cts, stop := api.StartCTS(t, configPath)
+	defer stop(t)
+	err := cts.WaitForAPI(defaultWaitForAPI)
+	require.NoError(t, err)
+
+	// Test that regex filter is filtering service registration information and
+	// task triggers
+	// 0. Setup: disable task, re-enable it
+	// 1. Confirm baseline: check current number of events
+	// 2. Register api service instance. Confirm that the task was triggered
+	//    (one new event)
+
+	// 0. disable then re-enable the task
+	subcmd := []string{"task", "disable", fmt.Sprintf("-port=%d", cts.Port()), dbTaskName}
+	output, err := runSubcommand(t, "", subcmd...)
+	assert.NoError(t, err, output)
+
+	subcmd = []string{"task", "enable", fmt.Sprintf("-port=%d", cts.Port()), dbTaskName}
+	output, err = runSubcommand(t, "yes\n", subcmd...)
+	assert.NoError(t, err, output)
+
+	// 1. get current number of events
+	eventCountBase := eventCount(t, dbTaskName, cts.Port())
+
+	// 2. register api service. check triggers task
+	service := testutil.TestService{ID: "api-1", Name: "api"}
+	testutils.RegisterConsulService(t, srv, service, testutil.HealthPassing,
+		defaultWaitForRegistration)
+	api.WaitForEvent(t, cts, dbTaskName, time.Now(), defaultWaitForEvent)
+
+	eventCountNow := eventCount(t, dbTaskName, cts.Port())
+	require.Equal(t, eventCountBase+1, eventCountNow,
+		"event count did not increment once. task was not triggered as expected")
+
+	cleanup()
+}
 
 // TestE2E_MetaCommandErrors tests cases that cross subcommands coded in
 // the command meta object. This starts up a local Consul server and runs
