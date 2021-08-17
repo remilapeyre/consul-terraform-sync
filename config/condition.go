@@ -39,6 +39,8 @@ func isConditionNil(c ConditionConfig) bool {
 		result = v == nil
 	case *CatalogServicesConditionConfig:
 		result = v == nil
+	case *NodesConditionConfig:
+		result = v == nil
 	default:
 		return c == nil || reflect.ValueOf(c).IsNil()
 	}
@@ -80,6 +82,10 @@ func conditionToTypeFunc() mapstructure.DecodeHookFunc {
 		}
 		if c, ok := conditions[servicesConditionType]; ok {
 			var config ServicesConditionConfig
+			return decodeConditionToType(c, &config)
+		}
+		if c, ok := conditions[nodesConditionTypes]; ok {
+			var config NodesConditionConfig
 			return decodeConditionToType(c, &config)
 		}
 
